@@ -1,5 +1,6 @@
 from copy import copy
 import decimal
+from enum import Enum
 import json
 import logging
 import os
@@ -72,6 +73,10 @@ class GLambdaTaskTypeInfo(TaskTypeInfo):
             GLambdaTaskBuilder
         )
 
+class VerificationMethod():
+    NO_VERIFICATION = "None"
+    EXTERNALLY_VERIFIED = "External"
+
 
 class GLambdaTask(CoreTask):
 
@@ -87,14 +92,21 @@ class GLambdaTask(CoreTask):
                  total_tasks=1,
                  method=None,
                  args=None,
+                 verification=None,
                  dir_manager=None):
         super(GLambdaTask, self).__init__(task_definition, owner, max_pending_client_results,
             resource_size, root_path, total_tasks)
         self.method = method
         self.args = args
-        self.results = None
+        self.verification_metadata = verification
+        self.verification_type = verification['type']
+        self.results = {}
         self.dir_manager = dir_manager
         self.output_path = dir_manager.get_task_output_dir(task_definition.task_id)
+        self.outputs = [
+            os.path.join(self.output_path, output)
+            for output in task_definition.outputs
+        ]
 
     def query_extra_data(self, perf_index: float,
                          node_id: Optional[str] = None,
@@ -207,6 +219,41 @@ class GLambdaTask(CoreTask):
 
     def get_output_names(self) -> List:
         return [self.output_path]
+=======
+        self.results[subtask_id] = task_result
+
+        if self.verification_type == VerificationMethod.NO_VERIFICATION:
+            verdict = SubtaskVerificationState.VERIFIED
+        elif self.verification_type == VerificationMethod.EXTERNALLY_VERIFIED:
+            self.subtasks_given[subtask_id]['verif_cb'] = verification_finished
+            verdict = SubtaskVerificationState.IN_PROGRESS
+        try:
+            self._handle_verification_verdict(subtask_id, verdict,
+                                              verification_finished)
+        except Exception as exc:
+            logger.warning("Failed during accepting results %s", exc)
+
+    def _handle_verification_verdict(self, subtask_id, verdict, verif_cb):
+        if verdict == SubtaskVerificationState.VERIFIED:
+            self.num_tasks_received += 1
+            self._task_verified(subtask_id, verif_cb)
+        elif verdict in [SubtaskVerificationState.TIMEOUT,
+                            SubtaskVerificationState.WRONG_ANSWER,
+                            SubtaskVerificationState.NOT_SURE]:
+            self.computation_failed(subtask_id)
+            verif_cb()
+        else:
+            logger.warning("Unhandled verification verdict: {}".format(
+                verdict))
+
+    def get_output_names(self) -> List:
+        return self.outputs
+
+    def external_verify_subtask(self, subtask_id, verdict):
+        verif_cb = self.subtasks_given[subtask_id].pop('verif_cb')
+        self._handle_verification_verdict(subtask_id, verdict, verif_cb)
+        return None
+>>>>>>> refactor_messages
 
 
 class GLambdaTaskBuilder(CoreTaskBuilder):
@@ -235,8 +282,9 @@ class GLambdaTaskBuilder(CoreTaskBuilder):
         kwargs["task_definition"] = self.task_definition
         kwargs["owner"] = self.owner
         kwargs["root_path"] = self.root_path
-        kwargs["method"] = self.task_definition.extra_data['method']
-        kwargs["args"] = self.task_definition.extra_data['args']
+        kwargs["method"] = self.task_definition.method
+        kwargs["args"] = self.task_definition.args
+        kwargs["verification"] = self.task_definition.verification
         kwargs["dir_manager"] = self.dir_manager
         return kwargs
 
@@ -248,7 +296,10 @@ class GLambdaTaskBuilder(CoreTaskBuilder):
         if 'resources' in dictionary:
             definition.resources = set(dictionary['resources'])
         definition.subtasks_count = int(dictionary['subtasks_count'])
-        definition.extra_data = dictionary['extra_data']
+        definition.method = dictionary['method']
+        definition.args = dictionary['args']
+        definition.verification = dictionary['verification']
+        definition.outputs = dictionary['outputs']
         return definition
 
     @classmethod
