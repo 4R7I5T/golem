@@ -58,4 +58,4 @@ def run_powershell(
         stdout = f"{exc.stdout.decode('utf8')}\n" if exc.stdout else ''
         stderr = exc.stderr.decode('utf8') if exc.stderr else ''
 
-        raise RuntimeError(stdout + stderr)
+        raise RuntimeError(f'{exc}\nstdout: {stdout}\nstderr: {stderr}')
